@@ -17,7 +17,12 @@ all_translations
 .. method:: all_translations(obj)
 
     A method that can be used in :attr:`list_display` and shows a list of
-    languages in which this object is available.
+    languages in which this object is available. Entries are linked to their
+    corresponding admin page.
+
+    .. note:: You should add `prefetch_related('translations')` to your queryset
+              if you use this in :attr:`~django.contrib.admin.ModelAdmin.list_display`,
+              else one query will be run for every item in the list.
 
 
 ***********************************************************

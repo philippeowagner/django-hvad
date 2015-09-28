@@ -12,10 +12,6 @@ This module is where most of the functionality is implemented.
     ``settings.LANGUAGES``, could possibly become a setting on it's own at some
     point.
 
-.. data:: queryset_class
-
-    Defautls to ``TranslationQueryset``. Overwrite to use your custom queryset class. 
-
 
 ***************
 FieldTranslator
@@ -48,7 +44,7 @@ ValuesMixin
 
 .. class:: ValuesMixin
 
-    A mixin class for :class:`django.db.models.query.ValuesQuerySet` which
+    A mixin class for :class:`~django.db.models.query.ValuesQuerySet` which
     implements the functionality needed by :meth:`TranslationQueryset.values`
     and :meth:`TranslationQueryset.values_list`.
 
@@ -60,6 +56,21 @@ ValuesMixin
         
         Iterates over the rows from the superclass iterator and calls
         :meth:`_strip_master` on the key if the row is a dictionary.
+
+
+*********************
+SkipMasterSelectMixin
+*********************
+
+.. class:: SkipMasterSelectMixin
+
+    A mixin class for specialized querysets such as
+    :class:`~django.db.models.query.DateQuerySet` and
+    :class:`~django.db.models.query.DateTimeQuerySet` which forces
+    :class:`~hvad.manager.TranslationQueryset` not to add the related lookup
+    on the `master` field. This is required as those specialized querysets
+    use DISTINCT, and added the related lookup brings along all fields on the
+    :term:`Shared Model`, breaking the lookup.
 
 
 *******************
@@ -88,18 +99,31 @@ TranslationQueryset
     
         The cached field translator for this manager.
     
-    .. attribute:: _real_manager
-    
-        The real manager of the :term:`Shared Model`.
-        
-    .. attribute:: _fallback_manager
-    
-        The fallback manager of the :term:`Shared Model`.
-    
     .. attribute:: _language_code
     
-        The language code of this queryset.
-    
+        The language code of this queryset, or one of the following special values:
+
+        - ``None``: :func:`~django.utils.translation.get_language`
+          will be called to get the current language.
+        - ``'all'``: no language filtering will be applied, a copy of an instance
+          will be returned for every translation that matched the query.
+
+    .. attribute:: _language_fallbacks
+
+        A tuple of fallbacks used for this queryset, if fallbacks have been
+        activated by :meth:`fallbacks`, or `None` otherwise.
+
+        A ``None`` value in the tuple will be replaced with current language
+        at query evaluation.
+
+    .. attribute:: _hvad_switch_fields
+
+        A tuple of attributes to move from the :term:`Translations Model` to the
+        :term:`Shared Model` instance before returning objects to the caller. It
+        is mostly used by :meth:`~django.db.models.query.QuerySet.extra` so
+        additional values collected by the ``select`` argument are available on
+        the final instance.
+
     .. attribute:: translations_manager
     
         The (real) manager of the :term:`Translations Model`.
@@ -120,7 +144,7 @@ TranslationQueryset
     
     .. method:: _translate_args_kwargs(self, *args, **kwargs)
     
-        Translates args (:class:`django.db.models.expressions.Q` objects) and
+        Translates args (:class:`~django.db.models.Q` objects) and
         kwargs (dictionary of query lookups and values) to be language aware, by
         prefixing fields on the :term:`Shared Model` with ``'master__'``. Uses
         :attr:`field_translator` for the kwargs and :meth:`_recurse_q` for the
@@ -134,27 +158,27 @@ TranslationQueryset
 
     .. method:: _recurse_q(self, q)
     
-        Recursively walks a :class:`django.db.models.expressions.Q` object and
+        Recursively walks a :class:`~django.db.models.Q` object and
         translates it's query lookups to be prefixed by ``'master__'`` if they
         access a field on :term:`Shared Model`.
         
-        Every :class:`django.db.models.expressions.Q` object has an attribute
-        :attr:`django.db.models.expressions.Q.children` which is either a list
-        of other :class:`django.db.models.expressions.Q` objects or a tuple
+        Every :class:`~django.db.models.Q` object has an attribute
+        :attr:`~django.db.models.Q.children` which is either a list
+        of other :class:`~django.db.models.Q` objects or a tuple
         where the key is the query lookup.
         
-        This method returns a new :class:`django.db.models.expressions.Q`
+        This method returns a new :class:`~django.db.models.Q`
         object.
     
     .. method:: _find_language_code(self, q)
     
-        Searches a :class:`django.db.models.expressions.Q` object for
+        Searches a :class:`~django.db.models.Q` object for
         language code lookups. If it finds a child
-        :class:`django.db.models.expressions.Q` object that defines a language
+        :class:`~django.db.models.Q` object that defines a language
         code, it returns that language code if it's not ``None``. Used in
         :meth:`get` to ensure a language code is defined.
         
-        For more information about :class:`django.db.models.expressions.Q`
+        For more information about :class:`~django.db.models.Q`
         objects, see :meth:`_recurse_q`.
         
         Returns the language code if one was found or ``None``.
@@ -168,40 +192,115 @@ TranslationQueryset
     
     .. method:: _get_class(self, klass)
     
-        Given a :class:`django.db.models.query.QuerySet` class or subclass, it
+        Given a :class:`~django.db.models.query.QuerySet` class or subclass, it
         checks if the class is a subclass of any class in
         :attr:`override_classes` and if so, returns a new class which mixes
         the initial class, the class from :attr:`override_classes` and
         :class:`TranslationQueryset`. Otherwise returns the class given.
     
-    .. method:: _get_shared_query_set(self)
+    .. method:: _get_shared_queryset(self)
     
         Returns a clone of this queryset but for the shared model. Does so by
-        using :attr:`_real_manager` and filtering over this queryset. Returns a
-        queryset for the :term:`Shared Model`.
+        creating a :class:`~django.db.models.query.QuerySet` on :attr:`shared_model`
+        and filtering over this queryset. Returns a queryset for the :term:`Shared Model`.
     
+    .. method:: _add_language_filter(self)
+
+        Apply the language filter to current query. Language is retrieved from
+        :attr:`_language_code`, or :func:`~django.utils.translation.get_language` if
+        None. If :meth:`fallbacks` have been set, apply the additional join as well.
+
+        Special value ``'all'`` will prevent any language filter from being applied,
+        resulting in the query considering all translations, possibly returning
+        the same instance mutiple times if several of its translations match.
+        In that case, each instance will be :func:`combined <hvad.utils.combine>`
+        with one of the matching translations.
+
+        Applied filters include the base language filter on the language_code
+        field, as well as any related model translation set up by
+        :meth:`select_related`.
+
+    .. method:: _add_select_related(self, language_code)
+
+        .. versionadded:: 0.5
+
+        Applies the related selections to current query. This includes the basic
+        selection of ``master``, any relation specified through :meth:`select_related`
+        and the translations of any translatable models it navigates through.
+
     .. method:: language(self, language_code=None)
     
         Specifies a language for this queryset. This sets the
-        :attr:`_language_code` and filters by the language code.
-        
-        If no language code is given,
-        :func:`django.utils.translations.get_language` is called to get the
-        current language.
-        
+        :attr:`_language_code`, but no filter are actually applied until
+        :meth:`_add_language_filter` is called. This allows for query-time
+        resolution of the None value. It is an error to call :meth:`language`
+        multiple times on the same queryset.
+
+        The following special values are accepted:
+
+        - ``None``, or no value: :func:`~django.utils.translation.get_language`
+          will be called to get the current language.
+        - ``'all'``: no language filtering will be applied, a copy of an instance
+          will be returned for every translation that matched the query, each
+          copy being :func:`combined <hvad.utils.combine>` with one of the
+          matching translations.
+
         Returns a queryset.
-        
+
+        .. note:: Using ``language('all')`` and :meth:`select_related` on the
+                  same queryset is not supported and will raise a
+                  :exc:`~exceptions.NotImplementedError`.
+
+    .. method:: fallbacks(self, *languages)
+
+        .. versionadded:: 0.6
+
+        Activates fallbacks for this queryset. This sets the
+        :attr:`_language_fallbacks` attribute, but does not apply any join
+        or filtering until :meth:`_add_language_filter` is called. This allows
+        for query-time resolution of the ``None`` values in the list.
+
+        The following special cases are accepted:
+
+        - ``None`` as a single argument will disable fallbacks on the queryset.
+        - An empty argument list will use :setting:`LANGUAGES` setting as a
+          fallback list.
+        - A ``None`` value a language will be replaced by the current language
+          at query evalution time, by calling
+          :func:`~django.utils.translation.get_language`
+
+        Returns a queryset.
+
+        .. note:: Using ``fallbacks`` and :meth:`select_related` on the
+                  same queryset is not supported and will raise a
+                  :exc:`~exceptions.NotImplementedError`.
+
+        .. note:: This feature requires Django 1.6 or newer.
+
     .. method:: create(self, **kwargs)
     
         Creates a new instance using the kwargs given. If :attr:`_language_code`
         is not set and language_code is not in kwargs, it uses
-        :func:`django.utils.translations.get_language` to get the current
+        :func:`~django.utils.translation.get_language` to get the current
         language and injects that into kwargs.
         
         This causes two queries as opposed to the one by the normal queryset.
         
         Returns the newly created (combined) instance.
-    
+
+        .. note:: It is an error to call ``create`` with no ``language_code``
+                  on a queryset whose :attr:`_language_code` is ``'all'``.
+                  Doing so will raise a :exc:`~exceptions.ValueError`.
+
+    .. method:: bulk_create(self, objs, batch_size=None)
+
+        Not implemented yet and unlikely to be due to inherent limitations of
+        multi-table inserts.
+
+    .. method:: update_or_create(self, defaults=None, **kwargs)
+
+        Not implemented yet.
+
     .. method:: get(self, *args, **kwargs)
     
         Gets a single instance from this queryset using the args and kwargs
@@ -211,17 +310,20 @@ TranslationQueryset
         If a language code is given in the kwargs, it calls :meth:`language`
         using the language code provided. If none is given in kwargs, it uses
         :meth:`_find_language_code` on the
-        :class:`django.db.models.expressions.Q` objects given in args. If no
+        :class:`~django.db.models.Q` objects given in args. If no
         args were given or they don't contain a language code, it searches the
         :class:`django.db.models.sql.where.WhereNode` objects on the current
-        queryset for language codes. If none was found, it calls
-        :meth:`language` without an argument, which in turn uses 
-        :func:`django.utils.translations.get_language` to enforce a language to
-        be used in this queryset.
+        queryset for language codes. If none was found, it will use the language
+        of this queryset from :attr:`_language_code`, or the current language
+        as returned by :func:`~django.utils.translation.get_language` of that is None.
         
         Returns a (combined) instance if one can be found for the filters given,
         otherwise raises an appropriate exception depending on whether no or
         multiple objects were found.
+
+        .. warning:: It is an error to pass `language_code` in a Q object if a
+                     :meth:`select_related` clause was enabled on this queryset.
+                     Doing so will raise an :exc:`~exceptions.AssertionError`.
      
     .. method:: get_or_create(self, **kwargs)
     
@@ -251,13 +353,24 @@ TranslationQueryset
         Translates the fieldname (if given) using :attr:`field_translator` and
         calls the superclass.
 
+    .. method:: earliest(self, field_name=None)
+
+        .. versionadded:: 0.4
+
+        Translates the fieldname (if given) using :attr:`field_translator` and
+        calls the superclass.
+
+        Only defined if django version is 1.6 or newer.
+
     .. method:: in_bulk(self, id_list)
-    
-        Not implemented yet.
+
+        .. versionadded:: 0.4
+
+        Retrieves the objects, building a dict from :meth:`iterator`.
 
     .. method:: delete(self)
     
-        Deletes the :term:`Shared Model` using :meth:`_get_shared_query_set`.
+        Deletes the :term:`Shared Model` using :meth:`_get_shared_queryset`.
     
     .. method:: delete_translations(self)
     
@@ -271,7 +384,7 @@ TranslationQueryset
         two dictionaries holding only the shared or translated fields
         respectively. If translated fields are given, calls the superclass with
         the translated fields. If shared fields are given, uses
-        :meth:`_get_shared_query_set` to update the shared fields.
+        :meth:`_get_shared_queryset` to update the shared fields.
         
         If both shared and translated fields are updated, two queries are
         executed, if only one of the two are given, one query is executed.
@@ -281,7 +394,7 @@ TranslationQueryset
 
     .. method:: values(self, *fields)
     
-        Translates fields using :meth:`_translated_fieldnames` and calls the
+        Translates fields using :meth:`_translate_fieldnames` and calls the
         superclass.
 
     .. method:: values_list(self, *fields, **kwargs)
@@ -293,6 +406,13 @@ TranslationQueryset
     
         Translates fields using :meth:`_translate_fieldnames` and calls the
         superclass.
+
+    .. method:: datetimes(self, field_name, *args, **kwargs)
+
+        Translates fields using :meth:`_translate_fieldnames` and calls the
+        superclass.
+
+        Only defined if django version is 1.6 or newer.
 
     .. method:: exclude(self, *args, **kwargs)
     
@@ -309,12 +429,12 @@ TranslationQueryset
 
     .. method:: order_by(self, *field_names)
     
-        Translates fields using :meth:`_translated_fieldnames` and calls the
+        Translates fields using :meth:`_translate_fieldnames` and calls the
         superclass.
     
     .. method:: reverse(self)
     
-        Not implemented yet.
+        Calls the superclass.
 
     .. method:: defer(self, *fields)
     
@@ -327,7 +447,7 @@ TranslationQueryset
     .. method:: _clone(self, klass=None, setup=False, **kwargs)
     
         Injects *_local_field_names*, *_field_translator*, *_language_code*,
-        *_real_manager* and *_fallback_manager* into *kwargs*. If a *klass* is
+        and *shared_model* into *kwargs*. If a *klass* is
         given, calls :meth:`_get_class` to get a mixed class if necessary.
         
         Calls the superclass with the new *kwargs* and *klass*.
@@ -339,7 +459,8 @@ TranslationQueryset
         itself to enable non-cascading deletion.
         
         Interestingly, implementing the combination here also works for
-        :meth:`get` and :meth:`__getitem__`.
+        :meth:`get` and :meth:`__getitem__`. This is because the former uses the
+        latter, which in turn fetches results from an iterator.
 
 
 ******************
@@ -354,38 +475,57 @@ TranslationManager
     
         The :term:`Translations Model` for this manager.
 
+    .. attribute:: queryset_class
+
+        The QuerySet for this manager, used by the :meth:`language` method.
+        Overwrite to use a custom queryset. Your custom
+        queryset class must inherit :class:`TranslationQueryset`. Defaults to
+        :class:`TranslationQueryset`.
+
+    .. attribute:: fallback_class
+
+        The QuerySet for this manager, used by the :meth:`untranslated` method.
+        Overwrite to use a custom queryset. Defaults to :class:`FallbackQueryset`.
+
+    .. attribute:: default_class
+
+        The QuerySet for this manager, used by the :meth:`get_queryset` method
+        and generally any query that does not invoke either :meth:`language` or
+        :meth:`untranslated`. Overwrite to use a custom queryset. Defaults to
+        :class:`~django.db.models.query.QuerySet`.
+
     .. method:: language(self, language_code=None)
     
-        Calls :meth:`get_query_set` to get a queryset and calls
-        :meth:`TranslationQueryset.language` on that queryset.
+        Instanciates a :class:`TranslationQueryset` from :attr:`queryset_class` and calls
+        :meth:`TranslationQueryset.language` on that queryset. This type of queryset
+        will filter by language, returning only objects that have a translation
+        in the specified language. Translated fields will be available on the
+        objects, in the specified language.
     
     .. method:: untranslated(self)
     
-        Returns an instance of :class:`FallbackQueryset` for this manager.
-        
-    .. method:: get_query_set(self)
+        Returns an instance of :class:`FallbackQueryset` for this manager, or any
+        custom queryset defined by :attr:`fallback_class`. This type of
+        queryset will load translations using fallbacks if current language is
+        not available. It can generate a lot a queries, use with caution.
+
+    .. method:: get_queryset(self)
     
-        Returns an instance of :class:`TranslationQueryset` for this manager.
-        The queryset returned will have the *master* relation to the
-        :term:`Shared Model` marked to be selected when querying, using 
-        :meth:`select_related`.
+        Returns a vanilla, non-translating queryset for this manager. It uses
+        the default :class:`~django.db.models.query.QuerySet` or any custom
+        queryset defined by :attr:`default_class`.
+
+        Instances returned will not have translated fields, and attempts to access them
+        will result in an exception being raised. See :meth:`language` and :meth:`untranslated`
+        to access translated fields.
+
+        It is possible to override this behavior by setting :attr:`default_class`
+        to :class:`TranslationQueryset`, :class:`FallbackQueryset` or any queryset
+        that has a translation-aware implementation.
     
     .. method:: contribute_to_class(self, model, name)
     
-        Contributes this manager, the real manager and the fallback manager onto
-        the class using :meth:`contribute_real_manager` and
-        :meth:`contribute_fallback_manager`.
-        
-    .. method:: contribute_real_manager(self)
-    
-        Creates a real manager and contributes it to the model after prefixing
-        the name with an underscore.
-    
-    .. method:: contribute_fallback_manager(self)
-    
-        Creates a fallback manager and contributes it to the model after
-        prefixing the name with an underscore and suffixing it with
-        ``'_fallback'``.
+        Contributes this manager onto the class.
 
 
 ****************
@@ -394,8 +534,24 @@ FallbackQueryset
 
 .. class:: FallbackQueryset
 
+    .. deprecated:: 1.4
+
     A queryset that can optionally use fallbacks and by default only fetches the
     :term:`Shared Model`.
+
+    There are actually two underlying implementations, the ``LegacyFallbackQueryset``
+    and the ``SelfJoinFallbackQueryset``. Implementation is chosen at initialization
+    based on the ``HVAD_LEGACY_FALLBACKS`` setting. It defaults to ``False``
+    (use SelfJoin) on Django 1.6 and newer, and ``True`` (use Legacy) on older
+    versions.
+
+    The ``LegacyFallbackQueryset`` generates lots of queries as it walks through
+    batches of models, fetches their translations and matches them onto the models.
+
+    The ``SelfJoinFallbackQueryset`` uses a single self outer join to achieve the same
+    result in only one (complex) query. Performance is good as the number of items
+    per model in the cross-product is limited to the number of languages that
+    Django supports. Implementation digs deeper into Django internals, though.
 
     .. attribute:: _translation_fallbacks
     
@@ -415,29 +571,20 @@ FallbackQueryset
     
     .. method:: use_fallbacks(self, *fallbacks)
     
+        .. deprecated:: 1.4
+
         If this method gets called, :meth:`iterator` will use the fallbacks
-        defined here. If not fallbacks are given, :data:`FALLBACK_LANGUAGES`
-        will be used.
+        defined here. `None` value will be replaced with current language at
+        query evaluation, as returned by :func:`~django.utils.translation.get_language`.
+        If not fallbacks are given, :data:`FALLBACK_LANGUAGES` will be used,
+        with current language prepended.
+
+        This method has been superseded by :meth:`~hvad.manager.TranslationQueryset.fallbacks`
+        and will be removed when support for Django 1.4 is dropped.
 
     .. method:: _clone(self, klass=None, setup=False, **kwargs)
     
         Injects *translation_fallbacks* into *kwargs* and calls the superclass.
-
-
-**************************
-TranslationFallbackManager
-**************************
-
-.. class:: TranslationFallbackManager
-
-    .. method:: use_fallbacks(self, *fallbacks)
-    
-        Proxies to :meth:`FallbackQueryset.use_fallbacks` by calling
-        :meth:`get_query_set` first.
-
-    .. method:: get_query_set(self)
-    
-        Returns an instance of :class:`FallbackQueryset` for this manager.
 
 
 ************************
@@ -458,25 +605,25 @@ TranslationAwareQueryset
         Translates *args* and *kwargs* into translation aware *args* and
         *kwargs* using :func:`hvad.fieldtranslator.translate` by iterating over
         the *kwargs* dictionary and translating it's keys and recursing over the
-        :class:`django.db.models.expressions.Q` objects in *args* using 
+        :class:`~django.db.models.Q` objects in *args* using
         :meth:`_recurse_q`. 
         
         Returns a triple of *newargs*, *newkwargs* and *extra_filters* where
         *newargs* and *newkwargs* are the translated versions of *args* and
         *kwargs* and *extra_filters* is a
-        :class:`django.db.models.expressions.Q` object to use to filter for the
+        :class:`~django.db.models.Q` object to use to filter for the
         current language. 
 
     .. method:: _recurse_q(self, q)
     
         Recursively translate the keys in the
-        :class:`django.db.models.expressions.Q` object given using 
+        :class:`~django.db.models.Q` object given using
         :func:`hvad.fieldtranslator.translate`. For more information about
-        :class:`django.db.models.expressions.Q`, see
+        :class:`~django.db.models.Q`, see
         :meth:`TranslationQueryset._recurse_q`.
         
         Returns a tuple of *q* and *language_joins* where *q* is the translated
-        :class:`django.db.models.expressions.Q` object and *language_joins* is
+        :class:`~django.db.models.Q` object and *language_joins* is
         a list of extra language join filters to be applied using the current
         language.
     
@@ -490,14 +637,14 @@ TranslationAwareQueryset
         
         Returns a tuple of *newfields* and *extra_filters* where *newfields* is
         a list of translated fieldnames and *extra_filters* is a
-        :class:`django.db.models.expressions.Q` object to be used to filter for
+        :class:`~django.db.models.Q` object to be used to filter for
         language joins. 
 
     .. method:: language(self, language_code=None)
     
         Sets the :attr:`_language_code` attribute either to the language given
         with *language_code* or by getting the current language from
-        :func:`django.utils.translations.get_language`. Unlike
+        :func:`~django.utils.translation.get_language`. Unlike
         :meth:`TranslationQueryset.language`, this does not actually filter by
         the language yet as this happens in :meth:`_filter_extra`.
     
@@ -528,7 +675,7 @@ TranslationAwareQueryset
         translate that fieldname. Calls :meth:`_filter_extra` with the
         *extra_filters* returned by :func:`hvad.fieldtranslator.translate` if it
         was used, otherwise with an empty
-        :class:`django.db.models.expressions.Q` object.
+        :class:`~django.db.models.Q` object.
 
     .. method:: in_bulk(self, id_list)
     
@@ -536,15 +683,15 @@ TranslationAwareQueryset
 
     .. method:: values(self, *fields)
     
-        Calls :meth:`_translated_fieldnames` to translated the fields. Then
+        Calls :meth:`_translate_fieldnames` to translated the fields. Then
         calls :meth:`_filter_extra` with the *extra_filters* returned by
-        :meth:`_translated_fieldnames`.
+        :meth:`_translate_fieldnames`.
 
     .. method:: values_list(self, *fields, **kwargs)
     
-        Calls :meth:`_translated_fieldnames` to translated the fields. Then
+        Calls :meth:`_translate_fieldnames` to translated the fields. Then
         calls :meth:`_filter_extra` with the *extra_filters* returned by
-        :meth:`_translated_fieldnames`.
+        :meth:`_translate_fieldnames`.
 
     .. method:: dates(self, field_name, kind, order='ASC')
     
@@ -565,9 +712,9 @@ TranslationAwareQueryset
 
     .. method:: order_by(self, *field_names)
     
-        Calls :meth:`_translated_fieldnames` to translated the fields. Then
+        Calls :meth:`_translate_fieldnames` to translated the fields. Then
         calls :meth:`_filter_extra` with the *extra_filters* returned by
-        :meth:`_translated_fieldnames`.
+        :meth:`_translate_fieldnames`.
     
     .. method:: reverse(self)
     
@@ -587,11 +734,13 @@ TranslationAwareQueryset
     
     .. method:: _filter_extra(self, extra_filters)
     
-        Filters this queryset by the :class:`django.db.models.expressions.Q`
+        Filters this queryset by the :class:`~django.db.models.Q`
         object provided in *extra_filters* and returns a queryset from the
         superclass, so that the methods that call this method can directely
         access methods on the superclass to reduce boilerplate code.
-    
+
+        .. warning:: This internal method returns a ``super()`` proxy object,
+                     be sure to understand the implications before using it.
     
 ***********************
 TranslationAwareManager
@@ -599,6 +748,6 @@ TranslationAwareManager
 
 .. class:: TranslationAwareManager
 
-    .. method:: get_query_set(self)
+    .. method:: get_queryset(self)
 
         Returns an instance of :class:`TranslationAwareQueryset`.

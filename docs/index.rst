@@ -2,9 +2,6 @@
 Welcome to the Django hvad documentation!
 #########################################
 
-.. warning:: The previously used ``nani`` package name is now deprecated,
-             please upgrade your code to use ``hvad``. 
-
 ******************
 About this project
 ******************
@@ -12,31 +9,35 @@ About this project
 django-hvad provides a high level API to maintain multilingual content in your
 database using the Django ORM.
 
-*************************
-Before you dive into this
-*************************
-
-Please note that this documentation assumes that you are very familiar with 
+Please note that this documentation assumes that you are familiar with
 Django and Python, if you are not, please familiarize yourself with those first.
-
-While django-hvad tries to be as simple to use as possible, it's still
-recommended that you only use it if you consider yourself to be very strong in
-Python and Django.
-
 
 ************************
 Notes on Django versions
 ************************
 
-django-hvad is tested on Python 2.6 and 2.7 with Django 1.3.1, 1.4.5 and 1.5.1.
+The guideline is hvad supports all Django versions that are supported by the
+Django team. This holds true for Long-Term Support releases as well. Support for
+new versions will usually be introduced when they reach the beta stage.
 
+Thus, django-hvad 1.2 is tested on the following configurations:
+
+- Django 1.4.19, running Python 2.7.
+- Django 1.5.12, running Python 2.7 or 3.3.
+- Django 1.6.10, running Python 2.7 or 3.3.
+- Django 1.7.4, running Python 2.7, 3.3 or 3.4.
+- Django 1.8.0, running Python 2.7, 3.3 or 3.4.
+
+All tests are run against MySQL and PostgreSQL.
 
 ***************
 Contents
 ***************
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 3
+    :titlesonly:
+    :numbered: 2
 
     public/installation
     public/quickstart
@@ -44,12 +45,12 @@ Contents
     public/queryset
     public/forms
     public/admin
+    public/restframework
+    public/faq
     public/release_notes
     public/contact
     public/contributing
     internal/index
-
-    changelog
 
     glossary
     

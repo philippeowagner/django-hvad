@@ -15,6 +15,18 @@
     
     Returns the new model. 
 
+.. function:: contribute_translations(cls, rel)
+
+    Gets called from :func:`prepare_translatable_model` to set the
+    descriptors of the fields on the :term:`Translations Model` onto the
+    model.
+
+.. function:: prepare_translatable_model(sender)
+
+    Gets called from :class:`~django.db.models.Model`'s metaclass to
+    customize model creation. Performs checks, then contributes translations
+    and translation manager onto models that inherit
+    :class:`~hvad.models.TranslatableModel`.
 
 ****************
 TranslatedFields
@@ -45,17 +57,6 @@ BaseTranslationModel
     class is abstract.
 
 
-**********************
-TranslatableModelBase        
-**********************
-
-.. class:: TranslatableModelBase
-
-    Metaclass of :class:`TranslatableModel`.
-
-    .. method:: __new__(cls, name, bases, attrs)
-
-
 ******************
 TranslatableModel        
 ******************
@@ -69,7 +70,7 @@ TranslatableModel
     If initalized with data, it splits the shared and translated fields and
     prepopulates both the :term:`Shared Model` and the
     :term:`Translations Model`. If no *language_code* is given,
-    :func:`django.utils.translations.get_language` is used to get the language
+    :func:`~django.utils.translation.get_language` is used to get the language
     for the :term:`Translations Model` instance that gets initialized.
     
     .. note:: When initializing a :class:`TranslatableModel`, positional
@@ -87,16 +88,10 @@ TranslatableModel
     
         A list of field on the :term:`Translations Model`.
     
-    .. classmethod:: contribute_translations(cls, rel)
-    
-        Gets called from the :class:`TranslatableModelBase` to set the
-        descriptors of the fields on the :term:`Translations Model` onto the
-        model.
-
     .. classmethod:: save_translations(cls, instance, **kwargs)
     
-        This classmethod is connected to the model's post save signal from the
-        :class:`TranslatableModelBase` and saves the cached translation if it's
+        This classmethod is connected to the model's post save signal from
+        :func:`prepare_translatable_model` and saves the cached translation if it's
         available.
     
     .. method:: translate(self, language_code)

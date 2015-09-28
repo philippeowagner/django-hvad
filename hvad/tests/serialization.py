@@ -1,9 +1,9 @@
 import pickle
-from hvad.test_utils.testcase import NaniTestCase
-from hvad.test_utils.context_managers import LanguageOverride
+from django.utils import translation
+from hvad.test_utils.testcase import HvadTestCase
 from hvad.test_utils.project.app.models import Normal
 
-class PicklingTest(NaniTestCase):
+class PicklingTest(HvadTestCase):
     def test_untranslated_new_object_can_be_pickled(self):
         normal = Normal(shared_field="Shared")
         serialized_repr = pickle.dumps(normal)
@@ -32,7 +32,7 @@ class PicklingTest(NaniTestCase):
         self.assertEqual(normal.shared_field, unpickled.shared_field)
 
     def test_translated_object_can_be_pickled(self):
-        with LanguageOverride('en'):
+        with translation.override('en'):
             normal = Normal.objects.create(
                 shared_field="Shared",
                 translated_field = "English",
@@ -56,7 +56,7 @@ class PicklingTest(NaniTestCase):
         self.assertEqual(unpickled.get(pk=normal.pk), normal)
 
     def test_queryset_with_translated_objects_can_be_pickled(self):
-        with LanguageOverride('en'):
+        with translation.override('en'):
             normal = Normal.objects.create(
                 shared_field="Shared",
                 translated_field = "English",
@@ -69,7 +69,7 @@ class PicklingTest(NaniTestCase):
         self.assertEqual(unpickled.get(pk=normal.pk), normal)
 
     def test_translated_queryset_with_translated_objects_can_be_pickled(self):
-        with LanguageOverride('en'):
+        with translation.override('en'):
             normal = Normal.objects.create(
                 shared_field="Shared",
                 translated_field = "English",
